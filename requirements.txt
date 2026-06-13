@@ -1,0 +1,4 @@
+mcp[cli]==1.9.2
+uvicorn==0.34.2
+psutil==7.0.0
+gpiozero==2.0.1
