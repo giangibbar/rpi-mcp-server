@@ -48,9 +48,11 @@ def mcp_call_log(limit: int = 20) -> str:
 @mcp.tool()
 def system_info() -> str:
     """Get RPi4 system info: CPU temp, load, memory, disk, uptime."""
-    temp = subprocess.run(
-        ["vcgencmd", "measure_temp"], capture_output=True, text=True
-    ).stdout.strip() or "N/A"
+    try:
+        temp_raw = int(Path("/sys/class/thermal/thermal_zone0/temp").read_text().strip())
+        temp = f"temp={temp_raw / 1000:.1f}'C"
+    except Exception:
+        temp = "N/A"
     mem = psutil.virtual_memory()
     disk = psutil.disk_usage("/")
     load = psutil.getloadavg()
