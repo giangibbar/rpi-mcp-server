@@ -31,6 +31,8 @@ A Model Context Protocol (MCP) server for Raspberry Pi 4, exposing 22 hardware a
 | speedtest | Internet speed test (download, upload, ping) |
 | backup_all | Backup all SQLite databases to ~/backups/ |
 | git_status | Git status for all projects in ~/WORKSPACE |
+| format_sd | Format SD/USB drive (auto-detects removable media) |
+| mcp_call_log | Show recent tool call history |
 
 ## Setup
 

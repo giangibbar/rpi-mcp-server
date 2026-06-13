@@ -5,6 +5,7 @@ import subprocess
 import os
 import time
 from pathlib import Path
+from collections import deque
 
 import psutil
 from mcp.server.fastmcp import FastMCP
@@ -13,6 +14,32 @@ mcp = FastMCP("rpi4-tools", host="0.0.0.0", port=8002, stateless_http=True)
 
 HOME = Path("/home/egamgia")
 BACKUPS = HOME / "backups"
+
+# --- Call Log ---
+_call_log = deque(maxlen=100)
+LOG_FILE = HOME / "mcp-server" / "calls.json"
+
+
+def _log_call(tool: str, args: dict, result: str, elapsed: float):
+    entry = {"tool": tool, "args": args, "time": time.strftime("%Y-%m-%d %H:%M:%S"), "elapsed": round(elapsed, 2), "ok": True, "result_len": len(result)}
+    _call_log.appendleft(entry)
+    try:
+        LOG_FILE.write_text(json.dumps(list(_call_log), indent=None))
+    except Exception:
+        pass
+
+
+@mcp.tool()
+def mcp_call_log(limit: int = 20) -> str:
+    """Show recent MCP tool call history."""
+    if LOG_FILE.exists():
+        entries = json.loads(LOG_FILE.read_text())[:limit]
+    else:
+        entries = list(_call_log)[:limit]
+    lines = []
+    for e in entries:
+        lines.append(f"{e['time']} | {e['tool']:20s} | {e['elapsed']}s | {e.get('result_len',0)}b")
+    return "\n".join(lines) or "No calls logged yet"
 
 
 # --- System Monitoring ---
@@ -339,6 +366,36 @@ def file_serve(path: str, port: int = 9090, duration: int = 300) -> str:
 
 
 @mcp.tool()
+def format_sd(device: str = "", label: str = "SDCARD", fstype: str = "fat32") -> str:
+    """Format an SD card or USB drive. Auto-detects removable media if device not specified. fstype: fat32, ext4."""
+    if not device:
+        # Auto-detect removable device (not sda which is our SSD)
+        r = subprocess.run(["lsblk", "-dno", "NAME,RM,SIZE,TYPE"], capture_output=True, text=True)
+        for line in r.stdout.strip().split("\n"):
+            parts = line.split()
+            if len(parts) >= 4 and parts[1] == "1" and parts[3] == "disk" and parts[0] != "sda":
+                device = f"/dev/{parts[0]}"
+                break
+        if not device:
+            return "No removable device found"
+    # Safety check
+    if device == "/dev/sda":
+        return "Refusing to format /dev/sda (system SSD)"
+    steps = []
+    r = subprocess.run(["sudo", "wipefs", "-a", device], capture_output=True, text=True, timeout=10)
+    steps.append(f"wipefs: {'ok' if r.returncode == 0 else r.stderr.strip()}")
+    r = subprocess.run(["sudo", "parted", device, "--script", "mklabel", "msdos", "mkpart", "primary", fstype, "1MiB", "100%"], capture_output=True, text=True, timeout=10)
+    steps.append(f"parted: {'ok' if r.returncode == 0 else r.stderr.strip()}")
+    part = f"{device}1"
+    if fstype == "fat32":
+        r = subprocess.run(["sudo", "mkfs.vfat", "-F", "32", "-n", label, part], capture_output=True, text=True, timeout=30)
+    else:
+        r = subprocess.run(["sudo", "mkfs.ext4", "-L", label, part], capture_output=True, text=True, timeout=30)
+    steps.append(f"mkfs: {'ok' if r.returncode == 0 else r.stderr.strip()}")
+    return "\n".join(steps)
+
+
+@mcp.tool()
 def speedtest() -> str:
     """Run an internet speed test. Returns download, upload, ping."""
     r = subprocess.run(
@@ -377,6 +434,22 @@ def git_status(project: str = "") -> str:
         r = subprocess.run(["git", "status", "--short", "--branch"], cwd=str(p), capture_output=True, text=True, timeout=10)
         lines.append(f"[{p.name}]\n{r.stdout.strip()}")
     return "\n\n".join(lines) or "No git repos found"
+
+
+# --- Logging middleware ---
+_original_tools = {}
+for _name, _fn in list(mcp._tool_manager._tools.items()):
+    _original_tools[_name] = _fn.fn
+
+    def _make_wrapper(name, fn):
+        def wrapper(*args, **kwargs):
+            t0 = time.time()
+            result = fn(*args, **kwargs)
+            _log_call(name, kwargs, str(result) if result else "", time.time() - t0)
+            return result
+        return wrapper
+
+    _fn.fn = _make_wrapper(_name, _fn.fn)
 
 
 if __name__ == "__main__":
