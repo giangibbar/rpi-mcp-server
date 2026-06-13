@@ -86,8 +86,10 @@ def service_control(name: str, action: str = "status") -> str:
     """Manage systemd services. Actions: status, restart, stop, start, enable, disable, logs."""
     if action == "logs":
         cmd = ["journalctl", "-u", name, "-n", "50", "--no-pager"]
+    elif action == "status":
+        cmd = ["systemctl", "status", name]
     else:
-        cmd = ["systemctl", action, name]
+        cmd = ["sudo", "systemctl", action, name]
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
     return r.stdout + r.stderr
 
@@ -334,6 +336,47 @@ def file_serve(path: str, port: int = 9090, duration: int = 300) -> str:
         ["hostname", "-I"], capture_output=True, text=True
     ).stdout.split()[0]
     return f"http://{ip}:{port}/{filename} (available for {duration}s)"
+
+
+@mcp.tool()
+def speedtest() -> str:
+    """Run an internet speed test. Returns download, upload, ping."""
+    r = subprocess.run(
+        ["speedtest-cli", "--simple"],
+        capture_output=True, text=True, timeout=60
+    )
+    return r.stdout.strip() or r.stderr.strip() or "speedtest-cli not installed"
+
+
+@mcp.tool()
+def backup_all() -> str:
+    """Backup all SQLite databases to ~/backups/ with timestamp."""
+    import glob
+    date = time.strftime("%Y%m%d_%H%M")
+    bkp = HOME / "backups"
+    bkp.mkdir(exist_ok=True)
+    dbs = glob.glob(str(HOME / "WORKSPACE" / "**" / "*.db"), recursive=True)
+    results = []
+    for db in dbs:
+        name = Path(db).stem
+        dest = bkp / f"{name}-{date}.db"
+        r = subprocess.run(["sqlite3", db, f".backup '{dest}'"], capture_output=True, text=True, timeout=10)
+        results.append(f"{name}: {'ok' if r.returncode == 0 else r.stderr.strip()}")
+    return "\n".join(results) or "No databases found"
+
+
+@mcp.tool()
+def git_status(project: str = "") -> str:
+    """Show git status for one or all projects in ~/WORKSPACE."""
+    ws = HOME / "WORKSPACE"
+    projects = [ws / project] if project else sorted(ws.iterdir())
+    lines = []
+    for p in projects:
+        if not (p / ".git").exists():
+            continue
+        r = subprocess.run(["git", "status", "--short", "--branch"], cwd=str(p), capture_output=True, text=True, timeout=10)
+        lines.append(f"[{p.name}]\n{r.stdout.strip()}")
+    return "\n\n".join(lines) or "No git repos found"
 
 
 if __name__ == "__main__":
